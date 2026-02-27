@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ASDMotion Landmark Recorder</title>
+  <link rel="stylesheet" href="./style.css" />
+  <script src="./vendor/mediapipe/holistic/holistic.js"></script>
+  <script src="./vendor/ffmpeg/ffmpeg/dist/umd/ffmpeg.js"></script>
+</head>
+<body>
+  <main class="page">
+    <h1>ASDMotion Landmark Recorder</h1>
+    <p class="subtitle">60 FPS landmarks recording for `is_landmark_video=1`.</p>
+
+    <section class="panel controls">
+      <button id="permissionBtn" type="button">Enable Camera</button>
+      <button id="recordBtn" type="button" disabled>Start Recording</button>
+      <p id="status" class="status">Idle</p>
+    </section>
+
+    <section class="panel roi-panel">
+      <h2>Participant Capture Box</h2>
+      <label class="check-row">
+        <input id="roiEnabled" type="checkbox" checked />
+        <span>Use green box for capture region</span>
+      </label>
+      <div class="roi-grid">
+        <label class="field">
+          <span>X (%)</span>
+          <input id="roiX" type="range" min="0" max="90" value="15" />
+        </label>
+        <label class="field">
+          <span>Y (%)</span>
+          <input id="roiY" type="range" min="0" max="90" value="10" />
+        </label>
+        <label class="field">
+          <span>Width (%)</span>
+          <input id="roiW" type="range" min="10" max="100" value="70" />
+        </label>
+        <label class="field">
+          <span>Height (%)</span>
+          <input id="roiH" type="range" min="10" max="100" value="80" />
+        </label>
+      </div>
+      <p id="roiText" class="roi-text">Keep participant fully inside the green box.</p>
+    </section>
+
+    <details class="panel guide-panel">
+      <summary>Data Collection Guide</summary>
+      <div class="guide-content">
+        <h3>Actions For Analysis</h3>
+        <ul>
+          <li>Record baseline stillness for 3-5 seconds before activity.</li>
+          <li>Capture repeated hand and face interaction behaviors naturally.</li>
+          <li>Include seated and standing segments when possible.</li>
+          <li>Avoid fast camera movement; keep subject centered in ROI.</li>
+          <li>Record at least 30-60 seconds per sample.</li>
+        </ul>
+        <h3>Camera Position</h3>
+        <ul>
+          <li>Place camera at chest-to-eye level facing the subject.</li>
+          <li>Maintain 1 to 2 meters distance so full upper body is visible.</li>
+          <li>Keep camera stable on tripod or fixed surface.</li>
+          <li>Avoid extreme side angles; prefer frontal or slight 15 degree angle.</li>
+        </ul>
+        <h3>Lighting</h3>
+        <ul>
+          <li>Use even front lighting across face and hands.</li>
+          <li>Avoid strong backlight from windows behind subject.</li>
+          <li>Reduce flicker sources and rapid light changes.</li>
+          <li>Keep scene brightness consistent for the full recording.</li>
+        </ul>
+      </div>
+    </details>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>Camera Preview</h2>
+        <div class="preview-wrap">
+          <video id="cameraVideo" playsinline muted autoplay></video>
+          <div id="roiOverlay" class="roi-overlay hidden" data-label="Keep participant inside this box"></div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <h2>Landmark Output (Recorded)</h2>
+        <canvas id="landmarkCanvas" width="256" height="256"></canvas>
+      </article>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

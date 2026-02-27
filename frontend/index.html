@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ASD Motion Clinical Screening</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <h1>ASD Motion Clinical Screening</h1>
+        <p>Prototype decision-support interface for behavioral video screening.</p>
+      </div>
+      <div class="stepper" aria-label="Workflow steps">
+        <span id="stepUpload" class="step active">1. Upload</span>
+        <span id="stepProcess" class="step">2. Processing</span>
+        <span id="stepReport" class="step">3. Report</span>
+      </div>
+    </header>
+
+    <main>
+      <section id="screenUpload" class="screen active">
+        <article class="card card-upload">
+          <h2>Case Intake</h2>
+          <p class="subtext">Provide metadata and upload one video clip for screening.</p>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>Patient ID (optional)</span>
+              <input type="text" id="patientId" placeholder="e.g., ASD-2026-0142" />
+            </label>
+            <label class="field">
+              <span>Clinician / Reviewer (optional)</span>
+              <input type="text" id="clinicianName" placeholder="e.g., Dr. Lee" />
+            </label>
+          </div>
+
+          <div class="mode-row">
+            <label><input type="radio" name="inputMode" value="raw" checked /> Standard Video</label>
+            <label><input type="radio" name="inputMode" value="processed" /> Landmarks-Only Video</label>
+          </div>
+
+          <label class="field">
+            <span>Video File</span>
+            <input type="file" id="fileInput" accept="video/*" />
+          </label>
+
+          <div class="actions">
+            <button id="predictBtn" class="btn-primary">Run Screening</button>
+          </div>
+
+          <p id="uploadHint" class="hint">Select one video file to continue.</p>
+        </article>
+      </section>
+
+      <section id="screenProcessing" class="screen" aria-live="polite">
+        <article class="card card-processing">
+          <div class="spinner" aria-hidden="true"></div>
+          <h2>Processing Case</h2>
+          <p id="processingText">Analyzing uploaded video and generating clinical screening report.</p>
+          <ul class="process-list">
+            <li>Preprocessing frame sequence</li>
+            <li>Running temporal behavior model</li>
+            <li>Calibrating risk probability and evidence summary</li>
+          </ul>
+        </article>
+      </section>
+
+      <section id="screenReport" class="screen">
+        <article class="card card-report">
+          <div class="report-header">
+            <div>
+              <h2>Clinical Screening Report</h2>
+              <p class="subtext" id="reportMeta">Generated report</p>
+            </div>
+            <div class="report-actions">
+              <button id="downloadReportBtn" class="btn-secondary">Download PDF Report</button>
+              <button id="newCaseBtn" class="btn-primary">Start New Case</button>
+            </div>
+          </div>
+
+          <section class="report-block">
+            <h3>Screening Summary</h3>
+            <div class="summary-grid">
+              <div class="summary-item">
+                <span>Decision</span>
+                <strong id="decisionText">-</strong>
+              </div>
+              <div class="summary-item">
+                <span>Clinical Interpretation</span>
+                <strong id="clinicalInterpretation">-</strong>
+              </div>
+              <div class="summary-item">
+                <span>Calibrated Probability</span>
+                <strong id="probCal">-</strong>
+              </div>
+              <div class="summary-item">
+                <span>Raw Probability</span>
+                <strong id="probRaw">-</strong>
+              </div>
+              <div class="summary-item">
+                <span>Quality Score</span>
+                <strong id="quality">-</strong>
+              </div>
+              <div class="summary-item">
+                <span>Abstention Status</span>
+                <strong id="abstained">-</strong>
+              </div>
+              <div class="summary-item">
+                <span>Model Version</span>
+                <strong id="modelVersion">-</strong>
+              </div>
+              <div class="summary-item">
+                <span>Inference Time (ms)</span>
+                <strong id="inferenceMs">-</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="report-block">
+            <h3>Clinical Rationale</h3>
+            <ul id="reasons" class="bullet-list"></ul>
+          </section>
+
+          <section class="report-block">
+            <h3>Behavioral Event Evidence</h3>
+            <p class="subtext">Displayed when model outcome is Positive or Borderline.</p>
+            <ul id="events" class="bullet-list"></ul>
+          </section>
+
+          <section class="report-block">
+            <h3>Recommended Clinical Follow-up</h3>
+            <p id="followupText">-</p>
+          </section>
+
+          <section class="report-block disclaimer">
+            <h3>Clinical Use Notice</h3>
+            <p>
+              This output is a screening aid and must not be used as a standalone diagnosis.
+              Final determination requires comprehensive clinical assessment by qualified professionals.
+            </p>
+          </section>
+        </article>
+      </section>
+    </main>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
