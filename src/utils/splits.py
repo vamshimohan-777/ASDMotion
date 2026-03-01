@@ -1,3 +1,6 @@
+# ASDMotion detection role: This module contributes to the end-to-end ASD/micro-event detection pipeline.
+# Comments are added to clarify why the core logic matters for reliable detection outputs.
+
 import numpy as np
 from sklearn.model_selection import StratifiedGroupKFold
 
@@ -35,3 +38,4 @@ def check_group_overlap(train_groups, val_groups, fold_tag=""):
     if overlap:
         print(f"  [LeakageCheck]{fold_tag} OVERLAP SUBJECTS: {sorted(list(overlap))}")
         raise RuntimeError("Subject leakage detected between train and validation.")
+

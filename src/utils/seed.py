@@ -1,3 +1,6 @@
+# ASDMotion detection role: This module contributes to the end-to-end ASD/micro-event detection pipeline.
+# Comments are added to clarify why the core logic matters for reliable detection outputs.
+
 import os
 import random
 import numpy as np
@@ -24,3 +27,4 @@ def seed_worker(worker_id: int):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+

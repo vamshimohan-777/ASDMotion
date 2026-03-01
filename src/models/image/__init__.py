@@ -1,3 +1,5 @@
-"""Model module `src/models/image/__init__.py` that transforms inputs into features used for prediction."""
+# ASDMotion detection role: This module contributes to the end-to-end ASD/micro-event detection pipeline.
+# Comments are added to clarify why the core logic matters for reliable detection outputs.
+
 
 

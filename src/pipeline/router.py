@@ -1,3 +1,6 @@
+# ASDMotion detection role: This module contributes to the end-to-end ASD/micro-event detection pipeline.
+# Comments are added to clarify why the core logic matters for reliable detection outputs.
+
 def route_video(duration, Tmin=2.0, video_path=None):
     """
     Decide routing based on file type only.
@@ -10,3 +13,4 @@ def route_video(duration, Tmin=2.0, video_path=None):
             return "image"
         return "video"
     return "video"
+

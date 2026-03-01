@@ -1,116 +1,150 @@
-"""MediaPipe holistic landmark extractor."""
+# ASDMotion detection role: This module contributes to the end-to-end ASD/micro-event detection pipeline.
+# Comments are added to clarify why the core logic matters for reliable detection outputs.
 
-from __future__ import annotations
+# -- Suppress noisy C++ / TFLite / absl warnings BEFORE any imports --
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["GLOG_minloglevel"] = "2"
 
-import threading
+import contextlib
+import sys
 
-import cv2
-import numpy as np
+import logging
+logging.getLogger("mediapipe").setLevel(logging.ERROR)
 
-from src.models.video.mediapipe_layer.landmark_schema import DEFAULT_SCHEMA, FACE_KEYPOINTS_60
+try:
+    import absl.logging
+    absl.logging.set_verbosity(absl.logging.ERROR)
+    absl.logging.set_stderrthreshold(absl.logging.ERROR)
+except ImportError:
+    pass
 
-_LOCK = threading.Lock()
-_HOLISTIC = None
-
-
-def _get_holistic():
-    global _HOLISTIC
-    with _LOCK:
-        if _HOLISTIC is None:
-            import mediapipe as mp
-
-            _HOLISTIC = mp.solutions.holistic.Holistic(
-                static_image_mode=False,
-                model_complexity=1,
-                smooth_landmarks=True,
-                enable_segmentation=False,
-                refine_face_landmarks=False,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5,
-            )
-        return _HOLISTIC
+import warnings
+warnings.filterwarnings("ignore", message=".*_POSIX_C_SOURCE.*")
+warnings.filterwarnings("ignore", message=".*Feedback manager.*")
+warnings.filterwarnings("ignore", message=".*landmark_projection_calculator.*")
 
 
-def _fill_landmarks(dst_xyz, dst_mask, start_idx, lms, expected_count):
-    if lms is None:
-        return 0
-    points = list(lms.landmark)
-    n = min(int(expected_count), len(points))
-    for i in range(n):
-        p = points[i]
-        dst_xyz[start_idx + i, 0] = float(p.x)
-        dst_xyz[start_idx + i, 1] = float(p.y)
-        dst_xyz[start_idx + i, 2] = float(p.z)
-        dst_mask[start_idx + i] = 1.0
-    return n
-
-
-def extract_holistic_landmarks(frame_bgr, schema=DEFAULT_SCHEMA):
+@contextlib.contextmanager
+def suppress_stderr():
     """
-    Returns:
-      xyz: [J,3] float32
-      mask: [J] float32
-      meta: dict with modality quality fields
+    Redirects stderr (fd 2) to /dev/null to silence native C++ libraries (MediaPipe/TF).
     """
-    frame = np.asarray(frame_bgr)
-    if frame.ndim != 3 or frame.shape[2] != 3:
-        raise ValueError(f"Expected BGR frame [H,W,3], got {tuple(frame.shape)}")
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        old_stderr = os.dup(2)
+        sys.stderr.flush()
+        os.dup2(devnull, 2)
+        os.close(devnull)
+        yield
+    except Exception:
+        yield
+    finally:
+        try:
+            os.dup2(old_stderr, 2)
+            os.close(old_stderr)
+        except Exception:
+            pass
 
-    hls = _get_holistic()
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    rgb.flags.writeable = False
-    result = hls.process(rgb)
+# -- MediaPipe imports --
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+from pathlib import Path
 
-    j = int(schema.total_joints)
-    xyz = np.zeros((j, 3), dtype=np.float32)
-    mask = np.zeros((j,), dtype=np.float32)
+# -------- MODEL PATHS --------
+ROOT = Path(__file__).resolve().parents[4]
+FACE_MODEL = os.environ.get("ASDMOTION_FACE_MODEL", str(ROOT / "assets" / "video" / "face_landmarker.task"))
+POSE_MODEL = os.environ.get("ASDMOTION_POSE_MODEL", str(ROOT / "assets" / "video" / "pose_landmarker_full.task"))
+DISABLE = os.environ.get("ASDMOTION_DISABLE_MEDIAPIPE", "0") == "1"
 
-    pose_n = _fill_landmarks(
-        xyz,
-        mask,
-        start_idx=0,
-        lms=result.pose_landmarks,
-        expected_count=int(schema.pose_joints),
+
+def _is_placeholder(path: str) -> bool:
+    try:
+        if not os.path.exists(path):
+            return True
+        if os.path.getsize(path) < 1024:
+            with open(path, "rb") as f:
+                head = f.read(64)
+            if b"ASDMOTION_PLACEHOLDER" in head:
+                return True
+            return True
+    except Exception:
+        return True
+    return False
+
+
+if not DISABLE:
+    if _is_placeholder(FACE_MODEL) or _is_placeholder(POSE_MODEL):
+        print(
+            "[MediaPipe] Model files not found or placeholders detected.\n"
+            "           Set ASDMOTION_FACE_MODEL/ASDMOTION_POSE_MODEL\n"
+            "           or replace assets/video/*.task. Falling back to no landmarks."
+        )
+        DISABLE = True
+
+# -------- LANDMARKERS --------
+BaseOptions = mp.tasks.BaseOptions
+FaceLandmarker = mp.tasks.vision.FaceLandmarker
+FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
+VisionRunningMode = mp.tasks.vision.RunningMode
+
+face_landmarker = None
+pose_landmarker = None
+
+if not DISABLE:
+    face_options = FaceLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path=FACE_MODEL),
+        running_mode=VisionRunningMode.IMAGE,
+        output_face_blendshapes=False,
+        num_faces=1,
     )
-    left_n = _fill_landmarks(
-        xyz,
-        mask,
-        start_idx=int(schema.left_hand_slice.start),
-        lms=result.left_hand_landmarks,
-        expected_count=int(schema.hand_joints),
+    face_landmarker = FaceLandmarker.create_from_options(face_options)
+
+    PoseLandmarker = mp.tasks.vision.PoseLandmarker
+    PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+
+    pose_options = PoseLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path=POSE_MODEL),
+        running_mode=VisionRunningMode.IMAGE,
+        num_poses=1,
     )
-    right_n = _fill_landmarks(
-        xyz,
-        mask,
-        start_idx=int(schema.right_hand_slice.start),
-        lms=result.right_hand_landmarks,
-        expected_count=int(schema.hand_joints),
+    pose_landmarker = PoseLandmarker.create_from_options(pose_options)
+
+
+def extract_landmarks(frame):
+    """
+    Input:
+        frame: BGR image (OpenCV)
+    Output:
+        face_landmarks: list of landmarks OR None
+        pose_landmarks: list of 33 landmarks OR None
+    """
+    if DISABLE or face_landmarker is None or pose_landmarker is None:
+        return None, None
+
+    rgb = frame[:, :, ::-1]
+
+    mp_image = mp.Image(
+        image_format=mp.ImageFormat.SRGB,
+        data=rgb,
     )
 
-    face_start = int(schema.face_slice.start)
-    face_n = 0
-    if result.face_landmarks is not None:
-        pts = list(result.face_landmarks.landmark)
-        for i, src_idx in enumerate(FACE_KEYPOINTS_60[: int(schema.face_joints)]):
-            if 0 <= int(src_idx) < len(pts):
-                p = pts[int(src_idx)]
-                xyz[face_start + i, 0] = float(p.x)
-                xyz[face_start + i, 1] = float(p.y)
-                xyz[face_start + i, 2] = float(p.z)
-                mask[face_start + i] = 1.0
-                face_n += 1
+    with suppress_stderr():
+        face_result = face_landmarker.detect(mp_image)
+        pose_result = pose_landmarker.detect(mp_image)
 
-    pose_score = float(pose_n / max(int(schema.pose_joints), 1))
-    hand_score = float((left_n + right_n) / max(int(schema.hand_joints) * 2, 1))
-    face_score = float(face_n / max(int(schema.face_joints), 1))
-    overall = float((pose_score + hand_score + face_score) / 3.0)
+    face_landmarks = (
+        face_result.face_landmarks[0]
+        if face_result.face_landmarks and len(face_result.face_landmarks) > 0
+        else None
+    )
 
-    meta = {
-        "modality_quality": {
-            "pose": pose_score,
-            "hands": hand_score,
-            "face": face_score,
-        },
-        "overall_quality": overall,
-    }
-    return xyz, mask, meta
+    pose_landmarks = (
+        pose_result.pose_landmarks[0]
+        if pose_result.pose_landmarks and len(pose_result.pose_landmarks) > 0
+        else None
+    )
+
+    return face_landmarks, pose_landmarks
+

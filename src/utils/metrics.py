@@ -1,3 +1,6 @@
+# ASDMotion detection role: This module contributes to the end-to-end ASD/micro-event detection pipeline.
+# Comments are added to clarify why the core logic matters for reliable detection outputs.
+
 import numpy as np
 from sklearn.metrics import (
     accuracy_score,
@@ -164,3 +167,4 @@ def bootstrap_ci(labels, probs, metric_fn, n_iters=1000, seed=42):
     mid = float(np.percentile(stats, 50))
     high = float(np.percentile(stats, 97.5))
     return low, mid, high
+

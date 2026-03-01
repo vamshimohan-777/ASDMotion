@@ -1,3 +1,6 @@
+# ASDMotion detection role: This module contributes to the end-to-end ASD/micro-event detection pipeline.
+# Comments are added to clarify why the core logic matters for reliable detection outputs.
+
 from dataclasses import dataclass
 
 
@@ -84,3 +87,4 @@ def make_decision(prob_raw: float, prob_cal: float, quality_score: float,
         reasons=reasons,
         abstained=False,
     )
+

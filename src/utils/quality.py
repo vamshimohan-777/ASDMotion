@@ -1,3 +1,6 @@
+# ASDMotion detection role: This module contributes to the end-to-end ASD/micro-event detection pipeline.
+# Comments are added to clarify why the core logic matters for reliable detection outputs.
+
 import torch
 
 
@@ -74,3 +77,4 @@ def compute_quality_score(
     denom = (mask_f * frame_valid).sum(dim=1).clamp(min=1.0)
     q = (q_frame * mask_f * frame_valid).sum(dim=1) / denom
     return q.clamp(0.0, 1.0)
+

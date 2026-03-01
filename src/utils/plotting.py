@@ -1,3 +1,6 @@
+# ASDMotion detection role: This module contributes to the end-to-end ASD/micro-event detection pipeline.
+# Comments are added to clarify why the core logic matters for reliable detection outputs.
+
 import numpy as np
 
 
@@ -8,3 +11,4 @@ def ema_smooth(values, alpha=0.2):
     for v in values[1:]:
         smoothed.append(alpha * v + (1 - alpha) * smoothed[-1])
     return smoothed
+

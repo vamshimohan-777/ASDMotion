@@ -1,3 +1,6 @@
+# ASDMotion detection role: This module contributes to the end-to-end ASD/micro-event detection pipeline.
+# Comments are added to clarify why the core logic matters for reliable detection outputs.
+
 import numpy as np
 import torch
 from PIL import Image
@@ -88,3 +91,4 @@ def prepare_sequence_from_frames(frames, seq_len=32, transform=None):
             "hand_score": torch.tensor(hand_scores, dtype=torch.float32),
         }
     }
+

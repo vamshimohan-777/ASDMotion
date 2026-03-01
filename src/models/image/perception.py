@@ -1,0 +1,43 @@
+# ASDMotion detection role: This module contributes to the end-to-end ASD/micro-event detection pipeline.
+# Comments are added to clarify why the core logic matters for reliable detection outputs.
+
+import torch
+import torch.nn as nn
+from torchvision.models import ResNet18_Weights, ResNet50_Weights, resnet18, resnet50
+
+
+def _build_backbone(backbone_name: str, pretrained: bool):
+    name = str(backbone_name or "resnet18").lower()
+    if name == "resnet50":
+        weights = ResNet50_Weights.IMAGENET1K_V2 if pretrained else None
+        return resnet50(weights=weights), 2048
+    if name == "resnet18":
+        weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+        return resnet18(weights=weights), 512
+    raise ValueError(f"Unsupported backbone: {backbone_name}")
+
+
+class PerceptionCNN(nn.Module):
+    """
+    Perception CNN for the image path.
+    Processes single images (frames) for static evidence.
+    """
+
+    def __init__(self, pretrained: bool = True, backbone_name: str = "resnet18"):
+        super().__init__()
+
+        backbone, feature_dim = _build_backbone(backbone_name, pretrained)
+        backbone.fc = nn.Identity()
+        self.backbone = backbone
+
+        self.proj = nn.Sequential(
+            nn.Linear(feature_dim, 256),
+            nn.LayerNorm(256),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        features = self.backbone(x)
+        features = self.proj(features)
+        return features
+

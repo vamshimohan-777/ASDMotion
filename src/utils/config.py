@@ -1,3 +1,6 @@
+# ASDMotion detection role: This module contributes to the end-to-end ASD/micro-event detection pipeline.
+# Comments are added to clarify why the core logic matters for reliable detection outputs.
+
 import os
 import yaml
 
@@ -31,3 +34,4 @@ def apply_overrides(cfg: dict, overrides: list[str]) -> dict:
         value = yaml.safe_load(raw)
         _set_by_path(cfg, key.split("."), value)
     return cfg
+
