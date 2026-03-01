@@ -8,6 +8,7 @@ Notes:
 """
 
 # Keep these first and in-order so older checkpoints remain decodable.
+# Set `LEGACY_EVENT_TYPES` for subsequent steps so downstream prediction heads receive the right feature signal.
 LEGACY_EVENT_TYPES = [
     "name_call_response",
     "joint_attention_point",
@@ -28,6 +29,7 @@ LEGACY_EVENT_TYPES = [
     "motion_bursts_freezes",
 ]
 
+# Set `POSTURAL_CONTROL_EVENTS` for subsequent steps so downstream prediction heads receive the right feature signal.
 POSTURAL_CONTROL_EVENTS = [
     "postural_sway_burst",
     "sustained_body_rocking",
@@ -41,6 +43,7 @@ POSTURAL_CONTROL_EVENTS = [
     "hyper_extended_rigid_posture",
 ]
 
+# Set `REPETITIVE_MOTOR_EVENTS` for subsequent steps so downstream prediction heads receive the right feature signal.
 REPETITIVE_MOTOR_EVENTS = [
     "hand_flapping_bilateral",
     "hand_flapping_unilateral",
@@ -59,6 +62,7 @@ REPETITIVE_MOTOR_EVENTS = [
     "self_stimulatory_repetitive_motion_generic_rhythmic_limb_oscillation",
 ]
 
+# Set `MOTION_ENERGY_KINEMATIC_EVENTS` for subsequent steps so downstream prediction heads receive the right feature signal.
 MOTION_ENERGY_KINEMATIC_EVENTS = [
     "sudden_motion_burst",
     "gradual_motion_ramp_up",
@@ -72,6 +76,7 @@ MOTION_ENERGY_KINEMATIC_EVENTS = [
     "motion_variability_decrease",
 ]
 
+# Set `ASYMMETRY_EVENTS` for subsequent steps so downstream prediction heads receive the right feature signal.
 ASYMMETRY_EVENTS = [
     "persistent_unilateral_limb_dominance",
     "sudden_asymmetry_onset",
@@ -82,6 +87,7 @@ ASYMMETRY_EVENTS = [
     "asymmetric_repetitive_pattern",
 ]
 
+# Compute `HEAD_ORIENTATION_EVENTS` as an intermediate representation used by later output layers.
 HEAD_ORIENTATION_EVENTS = [
     "rapid_head_turn",
     "sustained_head_turn",
@@ -93,6 +99,7 @@ HEAD_ORIENTATION_EVENTS = [
     "sustained_disengaged_orientation_looking_away_posture",
 ]
 
+# Set `ENGAGEMENT_INTERACTION_POST...` for subsequent steps so downstream prediction heads receive the right feature signal.
 ENGAGEMENT_INTERACTION_POSTURE_EVENTS = [
     "torso_orientation_toward_stimulus",
     "torso_turning_away",
@@ -106,6 +113,7 @@ ENGAGEMENT_INTERACTION_POSTURE_EVENTS = [
     "abrupt_gesture_termination",
 ]
 
+# Set `COORDINATION_EVENTS` for subsequent steps so downstream prediction heads receive the right feature signal.
 COORDINATION_EVENTS = [
     "limb_coordination_breakdown",
     "out_of_phase_bilateral_movement",
@@ -117,6 +125,7 @@ COORDINATION_EVENTS = [
     "reduced_inter_limb_coupling_window",
 ]
 
+# Set `MICRO_DYNAMIC_EVENTS` for subsequent steps so downstream prediction heads receive the right feature signal.
 MICRO_DYNAMIC_EVENTS = [
     "micro_tremor_burst",
     "irregular_oscillation_cluster",
@@ -127,6 +136,7 @@ MICRO_DYNAMIC_EVENTS = [
     "intermittent_micro_movement_cluster",
 ]
 
+# Set `TEMPORAL_STRUCTURE_EVENTS` for subsequent steps so downstream prediction heads receive the right feature signal.
 TEMPORAL_STRUCTURE_EVENTS = [
     "prolonged_inactivity_interval",
     "rapid_event_succession_cluster",
@@ -135,6 +145,7 @@ TEMPORAL_STRUCTURE_EVENTS = [
     "event_density_drop",
 ]
 
+# Compute `COMPOSITE_BEHAVIORAL_EVENTS` as an intermediate representation used by later output layers.
 COMPOSITE_BEHAVIORAL_EVENTS = [
     "repetitive_motor_episode_multi_cycle_cluster",
     "freeze_burst_cycle",
@@ -148,6 +159,7 @@ COMPOSITE_BEHAVIORAL_EVENTS = [
     "sustained_motor_rigidity_episode",
 ]
 
+# Set `EVENT_TYPES` for subsequent steps so downstream prediction heads receive the right feature signal.
 EVENT_TYPES = (
     LEGACY_EVENT_TYPES
     + POSTURAL_CONTROL_EVENTS
@@ -162,13 +174,18 @@ EVENT_TYPES = (
     + COMPOSITE_BEHAVIORAL_EVENTS
 )
 
+# Branch on `len(EVENT_TYPES) != len(set(EVENT_TYPES))` to choose the correct output computation path.
 if len(EVENT_TYPES) != len(set(EVENT_TYPES)):
+    # Raise explicit error to stop invalid state from producing misleading outputs.
     raise ValueError("Duplicate event type names detected in EVENT_TYPES.")
 
+# Set `EVENT_TYPE_MAP` for subsequent steps so downstream prediction heads receive the right feature signal.
 EVENT_TYPE_MAP = {name: idx for idx, name in enumerate(EVENT_TYPES)}
 
 # Reverse mapping: ID -> event name (for debugging / reports)
+# Set `ID_TO_EVENT_TYPE` for subsequent steps so downstream prediction heads receive the right feature signal.
 ID_TO_EVENT_TYPE = {v: k for k, v in EVENT_TYPE_MAP.items()}
 
 # Number of defined event types
+# Set `NUM_EVENT_TYPES` for subsequent steps so downstream prediction heads receive the right feature signal.
 NUM_EVENT_TYPES = len(EVENT_TYPE_MAP)

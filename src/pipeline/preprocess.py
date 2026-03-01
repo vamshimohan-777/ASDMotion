@@ -1,4 +1,6 @@
+import argparse
 import csv
+import importlib
 import json
 import math
 import os
@@ -7,7 +9,6 @@ import time
 import cv2
 import numpy as np
 
-from src.models.video.mediapipe_layer.extractor import extract_holistic_landmarks
 from src.models.video.mediapipe_layer.landmark_schema import DEFAULT_SCHEMA
 from src.pipeline.router import route_video
 from src.utils.video_id import make_video_id
@@ -92,6 +93,19 @@ def _open_capture(video_path):
     return None
 
 
+def _load_landmark_extractor():
+    # Import lazily so training/inference can run when preprocessing extras are removed.
+    try:
+        module = importlib.import_module("src.models.video.mediapipe_layer.extractor")
+        extract_holistic_landmarks = getattr(module, "extract_holistic_landmarks")
+    except Exception as exc:
+        raise RuntimeError(
+            "Preprocessing extractor is unavailable (src.models.video.mediapipe_layer.extractor). "
+            "Either restore the extractor module or keep data.use_preprocessed=true."
+        ) from exc
+    return extract_holistic_landmarks
+
+
 def load_video(video_path, frame_stride=1, max_frames=0):
     if not os.path.exists(video_path):
         print(f"[Video] Missing file: {video_path}")
@@ -144,6 +158,7 @@ class VideoProcessor:
     def process_video_file(self, video_path, target_center=None, is_landmark_video=False):
         # target_center/is_landmark_video are kept for backward-compatible API.
         del target_center, is_landmark_video
+        extract_holistic_landmarks = _load_landmark_extractor()
 
         frames_raw, fps, duration = load_video(
             video_path,
@@ -399,11 +414,30 @@ def precompute_videos(
 
 
 def main():
-    csv_path = os.environ.get("ASDMOTION_CSV", "data/videos.csv")
-    processed_root = os.environ.get("ASDMOTION_PROCESSED_ROOT", "data/processed")
-    precompute_videos(csv_path=csv_path, processed_root=processed_root)
+    parser = argparse.ArgumentParser(description="Precompute landmark tensors to disk")
+    parser.add_argument("--csv", type=str, default=os.environ.get("ASDMOTION_CSV", "data/videos.csv"))
+    parser.add_argument(
+        "--processed-root",
+        type=str,
+        default=os.environ.get("ASDMOTION_PROCESSED_ROOT", "data/processed"),
+    )
+    parser.add_argument("--frame-stride", type=int, default=1)
+    parser.add_argument("--max-frames", type=int, default=0)
+    parser.add_argument("--t-min", type=float, default=float(TMIN))
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--progress-every", type=int, default=10)
+    args = parser.parse_args()
+
+    precompute_videos(
+        csv_path=args.csv,
+        processed_root=args.processed_root,
+        frame_stride=int(args.frame_stride),
+        max_frames=int(args.max_frames),
+        t_min=float(args.t_min),
+        overwrite=bool(args.overwrite),
+        progress_every=int(args.progress_every),
+    )
 
 
 if __name__ == "__main__":
     main()
-

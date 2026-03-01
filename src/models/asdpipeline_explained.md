@@ -442,3 +442,23 @@ Design payoff:
 ## 12. Quick Plain-Language Summary
 
 `ASDPipeline` turns each video into multiple motion windows, extracts key motion events from each window, merges all events into one sequence, and lets a transformer reason across them to produce a calibrated ASD risk score plus interpretable event evidence.
+
+---
+
+## 13. Gate-Training Mitigation Update
+
+The hard top-k risk is now mitigated in the active pipeline path with three concrete changes:
+
+1. `freeze_motion_encoder` now supports keeping `event_score_head` trainable while the rest of the motion encoder is frozen.
+2. The pipeline now propagates gate supervision tensors:
+   - `frame_event_scores` `[B,S,W]`
+   - `frame_event_logits` `[B,S,W]`
+   - `frame_valid_mask` `[B,S,W]`
+3. Training now adds an auxiliary differentiable bag loss on frame scores (`event_gate_bag_loss`) with config weight:
+   - `training.event_gate_aux_weight` (default `0.10`)
+
+### Why this helps
+
+- Hard top-k indices are still discrete.
+- But the gate/scorer now receives direct dense supervision from a continuous objective on frame scores.
+- This restores a reliable gradient path for event salience learning even when top-k routing is non-differentiable.
