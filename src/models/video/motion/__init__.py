@@ -1,11 +1,28 @@
-"""Model module `src/models/video/motion/__init__.py` that transforms inputs into features used for prediction."""
+"""Public exports for motion-model components used by training/inference code."""
 
-# Import symbols from `src.models.video.motion.behavior_transformer` used in this stage's output computation path.
+# Long-range temporal reasoning over window embeddings.
 from src.models.video.motion.behavior_transformer import BehavioralTransformer
-# Import symbols from `src.models.video.motion.encoder` used in this stage's output computation path.
-from src.models.video.motion.encoder import MultiBranchMotionEncoder
-# Import symbols from `src.models.video.motion.event_encoder` used in this stage's output computation path.
-from src.models.video.motion.event_encoder import ResNetMicroKineticEventEncoder
+# Multi-modality motion encoders (pose/hands/face wrappers).
+from src.models.video.motion.encoder import MultiBranchMotionEncoder, TemporalBranchEncoder
+# Short-range micro-kinetic encoder and backward-compatible alias.
+from src.models.video.motion.event_encoder import (
+    MicroKineticMotionEncoder,
+    ResNetMicroKineticEventEncoder,
+)
+# Motion + RGB late-fusion head.
+from src.models.video.motion.fusion import MotionRGBFusion
+# Optional RGB context branch.
+from src.models.video.motion.rgb_branch import ResNet18RGBBranch
 
-# Set `__all__` for subsequent steps so downstream prediction heads receive the right feature signal.
-__all__ = ["MultiBranchMotionEncoder", "BehavioralTransformer", "ResNetMicroKineticEventEncoder"]
+__all__ = [
+    # Core motion encoders.
+    "MicroKineticMotionEncoder",
+    "ResNetMicroKineticEventEncoder",
+    "TemporalBranchEncoder",
+    "MultiBranchMotionEncoder",
+    # Sequence-level temporal modeling.
+    "BehavioralTransformer",
+    # RGB branch and fusion module.
+    "ResNet18RGBBranch",
+    "MotionRGBFusion",
+]

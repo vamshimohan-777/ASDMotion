@@ -13,6 +13,8 @@ import urllib.parse
 # Import `urllib.request` to support computations in this stage of output generation.
 import urllib.request
 
+# Import `cv2` to support computations in this stage of output generation.
+import cv2
 # Import `numpy as np` to support computations in this stage of output generation.
 import numpy as np
 # Import `torch` to support computations in this stage of output generation.
@@ -22,6 +24,8 @@ from torch.utils.data import Dataset
 
 # Import symbols from `src.models.video.mediapipe_layer.landmark_schema` used in this stage's output computation path.
 from src.models.video.mediapipe_layer.landmark_schema import DEFAULT_SCHEMA
+# Import symbols from `src.models.video.motion.features` used in this stage's output computation path.
+from src.models.video.motion.features import build_motion_features, normalize_landmarks
 # Import symbols from `src.pipeline.preprocess` used in this stage's output computation path.
 from src.pipeline.preprocess import VideoProcessor
 # Import symbols from `src.utils.video_id` used in this stage's output computation path.
@@ -152,6 +156,8 @@ class VideoDataset(Dataset):
         max_frames=0,
         cache_enabled=True,
         smooth_kernel=5,
+        use_rgb=False,
+        pose_only=False,
     ):
         """Executes this routine and returns values used by later pipeline output steps."""
         # Compute `self.sequence_length` as an intermediate representation used by later output layers.
@@ -182,6 +188,8 @@ class VideoDataset(Dataset):
         self.cache_enabled = bool(cache_enabled)
         # Compute `self.smooth_kernel` as an intermediate representation used by later output layers.
         self.smooth_kernel = int(max(1, smooth_kernel))
+        self.use_rgb = bool(use_rgb)
+        self.pose_only = bool(pose_only)
         # Compute `self.schema` as an intermediate representation used by later output layers.
         self.schema = DEFAULT_SCHEMA
         # Set `self.processor` for subsequent steps so gradient updates improve future predictions.
@@ -821,6 +829,8 @@ class VideoDataset(Dataset):
         mask_path = os.path.join(base_dir, "landmark_mask.npy")
         # Compute `timestamps_path` as an intermediate representation used by later output layers.
         timestamps_path = os.path.join(base_dir, "timestamps.npy")
+        # Compute `rgb_path` as an intermediate representation used by later output layers.
+        rgb_path = os.path.join(base_dir, "rgb_224.npy")
         # Compute `quality_path` as an intermediate representation used by later output layers.
         quality_path = os.path.join(base_dir, "quality.json")
 
@@ -830,6 +840,12 @@ class VideoDataset(Dataset):
         mask = np.load(mask_path).astype(np.float32)
         # Set `timestamps` for subsequent steps so gradient updates improve future predictions.
         timestamps = np.load(timestamps_path).astype(np.float32)
+        # Set `rgb` for subsequent steps so gradient updates improve future predictions.
+        rgb = None
+        if self.use_rgb and os.path.exists(rgb_path):
+            rgb = np.load(rgb_path)
+            if rgb.dtype != np.uint8:
+                rgb = np.clip(rgb, 0, 255).astype(np.uint8)
         # Set `quality` for subsequent steps so gradient updates improve future predictions.
         quality = None
         # Branch on `os.path.exists(quality_path)` to choose the correct output computation path.
@@ -849,6 +865,7 @@ class VideoDataset(Dataset):
             "landmarks": landmarks,
             "mask": mask,
             "timestamps": timestamps,
+            "rgb": rgb,
             "quality": quality,
         }
 
@@ -856,7 +873,7 @@ class VideoDataset(Dataset):
     def _load_from_video(self, entry):
         """Loads configuration or weights that define how subsequent computations produce outputs."""
         # Set `result` for subsequent steps so gradient updates improve future predictions.
-        result = self.processor.process_video_file(entry["video_path"])
+        result = self.processor.process_video_file(entry["video_path"], save_rgb=self.use_rgb)
         # Set `frames` for subsequent steps so gradient updates improve future predictions.
         frames = result["frames"]
         # Branch on `not frames` to choose the correct output computation path.
@@ -870,6 +887,7 @@ class VideoDataset(Dataset):
                 "landmarks": np.zeros((T, J, 3), dtype=np.float32),
                 "mask": np.zeros((T, J), dtype=np.float32),
                 "timestamps": np.zeros((T,), dtype=np.float32),
+                "rgb": None,
                 "quality": None,
             }
 
@@ -879,6 +897,12 @@ class VideoDataset(Dataset):
         mask = np.stack([f["mask"] for f in frames]).astype(np.float32)
         # Set `timestamps` for subsequent steps so gradient updates improve future predictions.
         timestamps = np.asarray([f["timestamp"] for f in frames], dtype=np.float32)
+        rgb = None
+        if self.use_rgb:
+            if "rgb_224" in frames[0]:
+                rgb = np.stack([f["rgb_224"] for f in frames]).astype(np.uint8)
+            else:
+                rgb = None
         # Set `quality` for subsequent steps so gradient updates improve future predictions.
         quality = [f["quality"] for f in frames]
         # Return `{` as this function's contribution to downstream output flow.
@@ -886,6 +910,7 @@ class VideoDataset(Dataset):
             "landmarks": landmarks,
             "mask": mask,
             "timestamps": timestamps,
+            "rgb": rgb,
             "quality": quality,
         }
 
@@ -943,121 +968,12 @@ class VideoDataset(Dataset):
 
     # Define a reusable pipeline function whose outputs feed later steps.
     def _normalize_landmarks(self, xyz, mask):
-        # xyz: [T, J, 3], mask: [T, J]
-        """Executes this routine and returns values used by later pipeline output steps."""
-        # Compute `xyz` as an intermediate representation used by later output layers.
-        xyz = xyz.copy()
-        # Build `mask` to gate invalid timesteps/joints from influencing outputs.
-        mask = mask.copy()
-        # Set `T, J, _` for subsequent steps so gradient updates improve future predictions.
-        T, J, _ = xyz.shape
-
-        # Fill missing values per joint/channel to stabilize normalization.
-        # Iterate over `range(J)` so each item contributes to final outputs/metrics.
-        for j in range(J):
-            # Build `valid` to gate invalid timesteps/joints from influencing outputs.
-            valid = mask[:, j] > 0.5
-            # Iterate over `range(3)` so each item contributes to final outputs/metrics.
-            for c in range(3):
-                # Call `_fill_missing_1d` and use its result in later steps so gradient updates improve future predictions.
-                xyz[:, j, c] = _fill_missing_1d(xyz[:, j, c], valid)
-
-        # Hip-centered coordinates.
-        # Compute `l_hip` as an intermediate representation used by later output layers.
-        l_hip = 23
-        # Compute `r_hip` as an intermediate representation used by later output layers.
-        r_hip = 24
-        # Build `hips_valid` to gate invalid timesteps/joints from influencing outputs.
-        hips_valid = (mask[:, l_hip] > 0.5) & (mask[:, r_hip] > 0.5)
-        # Compute `hip_center` as an intermediate representation used by later output layers.
-        hip_center = np.zeros((T, 3), dtype=np.float32)
-        # Compute `hip_center[hips_valid]` as an intermediate representation used by later output layers.
-        hip_center[hips_valid] = 0.5 * (xyz[hips_valid, l_hip] + xyz[hips_valid, r_hip])
-        # Branch on `hips_valid.any()` to choose the correct output computation path.
-        if hips_valid.any():
-            # Set `last` for subsequent steps so gradient updates improve future predictions.
-            last = hip_center[np.where(hips_valid)[0][0]].copy()
-        else:
-            # Set `last` for subsequent steps so gradient updates improve future predictions.
-            last = np.zeros((3,), dtype=np.float32)
-        # Iterate over `range(T)` so each item contributes to final outputs/metrics.
-        for t in range(T):
-            # Branch on `hips_valid[t]` to choose the correct output computation path.
-            if hips_valid[t]:
-                # Set `last` for subsequent steps so gradient updates improve future predictions.
-                last = hip_center[t]
-            else:
-                # Compute `hip_center[t]` as an intermediate representation used by later output layers.
-                hip_center[t] = last
-        # Compute `xyz` as an intermediate representation used by later output layers.
-        xyz = xyz - hip_center[:, None, :]
-
-        # Shoulder-distance scale normalization.
-        # Compute `l_sh` as an intermediate representation used by later output layers.
-        l_sh = 11
-        # Compute `r_sh` as an intermediate representation used by later output layers.
-        r_sh = 12
-        # Build `sh_valid` to gate invalid timesteps/joints from influencing outputs.
-        sh_valid = (mask[:, l_sh] > 0.5) & (mask[:, r_sh] > 0.5)
-        # Set `scale` for subsequent steps so gradient updates improve future predictions.
-        scale = np.ones((T,), dtype=np.float32)
-        # Branch on `sh_valid.any()` to choose the correct output computation path.
-        if sh_valid.any():
-            # Set `dist` for subsequent steps so gradient updates improve future predictions.
-            dist = np.linalg.norm(xyz[:, l_sh, :] - xyz[:, r_sh, :], axis=-1)
-            # Set `dist` for subsequent steps so gradient updates improve future predictions.
-            dist = np.clip(dist, 1e-4, None)
-            # Compute `scale[sh_valid]` as an intermediate representation used by later output layers.
-            scale[sh_valid] = dist[sh_valid]
-            # Set `median_scale` for subsequent steps so gradient updates improve future predictions.
-            median_scale = float(np.median(scale[sh_valid]))
-            # Branch on `median_scale <= 0` to choose the correct output computation path.
-            if median_scale <= 0:
-                # Set `median_scale` for subsequent steps so gradient updates improve future predictions.
-                median_scale = 1.0
-            # Execute this statement so gradient updates improve future predictions.
-            scale[~sh_valid] = median_scale
-        # Compute `xyz` as an intermediate representation used by later output layers.
-        xyz = xyz / scale[:, None, None]
-
-        # Temporal smoothing (weighted by mask).
-        # Iterate over `range(J)` so each item contributes to final outputs/metrics.
-        for j in range(J):
-            # Build `valid` to gate invalid timesteps/joints from influencing outputs.
-            valid = mask[:, j]
-            # Iterate over `range(3)` so each item contributes to final outputs/metrics.
-            for c in range(3):
-                # Compute `smoothed` as an intermediate representation used by later output layers.
-                smoothed = _moving_average_1d(xyz[:, j, c], k=self.smooth_kernel)
-                # Keep missing parts from filled value but blend with valid confidence.
-                # Call `this call` and use its result in later steps so gradient updates improve future predictions.
-                xyz[:, j, c] = (valid * smoothed) + ((1.0 - valid) * xyz[:, j, c])
-
-        # Return `xyz, mask` as this function's contribution to downstream output flow.
-        return xyz, mask
+        return normalize_landmarks(xyz, mask, smooth_kernel=self.smooth_kernel)
 
     # Execute this statement so gradient updates improve future predictions.
     @staticmethod
     def _build_motion_features(xyz, mask):
-        # xyz: [T, J, 3]
-        """Constructs components whose structure controls later training or inference outputs."""
-        # Set `vel` for subsequent steps so gradient updates improve future predictions.
-        vel = np.zeros_like(xyz, dtype=np.float32)
-        # Set `acc` for subsequent steps so gradient updates improve future predictions.
-        acc = np.zeros_like(xyz, dtype=np.float32)
-        # Branch on `xyz.shape[0] > 1` to choose the correct output computation path.
-        if xyz.shape[0] > 1:
-            # Execute this statement so gradient updates improve future predictions.
-            vel[1:] = xyz[1:] - xyz[:-1]
-            # Execute this statement so gradient updates improve future predictions.
-            acc[1:] = vel[1:] - vel[:-1]
-
-        # Compute `feat` as an intermediate representation used by later output layers.
-        feat = np.concatenate([xyz, vel, acc], axis=-1).astype(np.float32)  # [T, J, 9]
-        # Build `feat *` to gate invalid timesteps/joints from influencing outputs.
-        feat *= mask[..., None]
-        # Return `feat` as this function's contribution to downstream output flow.
-        return feat
+        return build_motion_features(xyz, mask)
 
     # Define a reusable pipeline function whose outputs feed later steps.
     def _sample_starts(self, T, window_size, n_windows):
@@ -1094,11 +1010,17 @@ class VideoDataset(Dataset):
         timestamps = data["timestamps"]
         # Set `quality` for subsequent steps so gradient updates improve future predictions.
         quality = data.get("quality", None)
+        # Set `rgb` for subsequent steps so gradient updates improve future predictions.
+        rgb = data.get("rgb", None)
 
         # Build `xyz, mask` to gate invalid timesteps/joints from influencing outputs.
         xyz, mask = self._normalize_landmarks(xyz, mask)
         # Build `motion` to gate invalid timesteps/joints from influencing outputs.
         motion = self._build_motion_features(xyz, mask)
+        if self.pose_only:
+            pose_slice = self.schema.pose_slice
+            motion = motion[:, pose_slice, :]
+            mask = mask[:, pose_slice]
 
         # Branch on `self.is_training` to choose the correct output computation path.
         if self.is_training:
@@ -1121,6 +1043,8 @@ class VideoDataset(Dataset):
         masks = []
         # Set `win_timestamps` for subsequent steps so gradient updates improve future predictions.
         win_timestamps = []
+        # Set `rgb_windows` for subsequent steps so gradient updates improve future predictions.
+        rgb_windows = []
         # Iterate over `starts` so each item contributes to final outputs/metrics.
         for s in starts:
             # Set `e` for subsequent steps so gradient updates improve future predictions.
@@ -1131,6 +1055,13 @@ class VideoDataset(Dataset):
             m = mask[s:e]
             # Set `ts` for subsequent steps so gradient updates improve future predictions.
             ts = timestamps[s:e]
+            # Set `rw` for subsequent steps so gradient updates improve future predictions.
+            rw = None
+            if self.use_rgb:
+                if rgb is None:
+                    rw = np.zeros((w.shape[0], 224, 224, 3), dtype=np.uint8)
+                else:
+                    rw = rgb[s:e]
 
             # Branch on `w.shape[0] < window_size` to choose the correct output computation path.
             if w.shape[0] < window_size:
@@ -1142,6 +1073,8 @@ class VideoDataset(Dataset):
                 m = np.pad(m, ((0, pad_t), (0, 0)), mode="constant")
                 # Set `ts` for subsequent steps so gradient updates improve future predictions.
                 ts = np.pad(ts, (0, pad_t), mode="edge" if ts.size > 0 else "constant")
+                if self.use_rgb:
+                    rw = np.pad(rw, ((0, pad_t), (0, 0), (0, 0), (0, 0)), mode="constant")
 
             # Call `windows.append` and use its result in later steps so gradient updates improve future predictions.
             windows.append(w.astype(np.float32))
@@ -1149,6 +1082,10 @@ class VideoDataset(Dataset):
             masks.append(m.astype(np.float32))
             # Call `win_timestamps.append` and use its result in later steps so gradient updates improve future predictions.
             win_timestamps.append(ts.astype(np.float32))
+            if self.use_rgb:
+                rw = rw.astype(np.float32) / 255.0
+                rw = np.transpose(rw, (0, 3, 1, 2))
+                rgb_windows.append(rw)
 
         # Compute `windows` as an intermediate representation used by later output layers.
         windows = np.stack(windows, axis=0)  # [S, W, J, 9]
@@ -1156,6 +1093,8 @@ class VideoDataset(Dataset):
         masks = np.stack(masks, axis=0)  # [S, W, J]
         # Set `win_timestamps` for subsequent steps so gradient updates improve future predictions.
         win_timestamps = np.stack(win_timestamps, axis=0)  # [S, W]
+        if self.use_rgb:
+            rgb_windows = np.stack(rgb_windows, axis=0)  # [S,W,3,224,224]
 
         # Per-video quality summary for optional downstream filtering.
         # Branch on `quality and isinstance(quality, list)` to choose the correct output computation path.
@@ -1167,26 +1106,20 @@ class VideoDataset(Dataset):
             # Compute `hand_q` as an intermediate representation used by later output layers.
             hand_q = float(np.mean([float(q.get("hand_score", 0.0)) for q in quality]))
         else:
-            # Fall back to modality coverage from mask.
-            # Set `pose_slice` for subsequent steps so gradient updates improve future predictions.
-            pose_slice = self.schema.pose_slice
-            # Compute `l_hand_slice` as an intermediate representation used by later output layers.
-            l_hand_slice = self.schema.left_hand_slice
-            # Compute `r_hand_slice` as an intermediate representation used by later output layers.
-            r_hand_slice = self.schema.right_hand_slice
-            # Set `face_slice` for subsequent steps so gradient updates improve future predictions.
-            face_slice = self.schema.face_slice
-            # Build `pose_q` to gate invalid timesteps/joints from influencing outputs.
-            pose_q = float(mask[:, pose_slice].mean())
-            # Compute `hand_q` as an intermediate representation used by later output layers.
-            hand_q = float(
-                0.5 * (mask[:, l_hand_slice].mean() + mask[:, r_hand_slice].mean())
-            )
-            # Build `face_q` to gate invalid timesteps/joints from influencing outputs.
-            face_q = float(mask[:, face_slice].mean())
+            if self.pose_only:
+                pose_q = float(mask.mean())
+                hand_q = 0.0
+                face_q = 0.0
+            else:
+                pose_slice = self.schema.pose_slice
+                l_hand_slice = self.schema.left_hand_slice
+                r_hand_slice = self.schema.right_hand_slice
+                face_slice = self.schema.face_slice
+                pose_q = float(mask[:, pose_slice].mean())
+                hand_q = float(0.5 * (mask[:, l_hand_slice].mean() + mask[:, r_hand_slice].mean()))
+                face_q = float(mask[:, face_slice].mean())
 
-        # Return `{` as this function's contribution to downstream output flow.
-        return {
+        out = {
             "motion_windows": torch.from_numpy(windows),  # [S, W, J, 9]
             "joint_mask": torch.from_numpy(masks),  # [S, W, J]
             "window_timestamps": torch.from_numpy(win_timestamps),  # [S, W]
@@ -1205,6 +1138,9 @@ class VideoDataset(Dataset):
                 "hand_score": torch.tensor(hand_q, dtype=torch.float32),
             },
         }
+        if self.use_rgb:
+            out["rgb_windows"] = torch.from_numpy(rgb_windows)  # [S,W,3,224,224]
+        return out
 
 
 # Define batch collation so model inputs are aligned for correct output computation.
@@ -1217,6 +1153,7 @@ def collate_motion_batch(batch):
 
     # Compute `max_w` as an intermediate representation used by later output layers.
     max_w = max(int(item["motion_windows"].shape[1]) for item in batch)
+    has_rgb = all(("rgb_windows" in item) for item in batch)
     # Set `s` for subsequent steps so gradient updates improve future predictions.
     s = int(batch[0]["motion_windows"].shape[0])
     # Set `j` for subsequent steps so gradient updates improve future predictions.
@@ -1230,6 +1167,7 @@ def collate_motion_batch(batch):
     mask_list = []
     # Set `ts_list` for subsequent steps so gradient updates improve future predictions.
     ts_list = []
+    rgb_list = []
     # Set `quality` for subsequent steps so gradient updates improve future predictions.
     quality = {"face_score": [], "pose_score": [], "hand_score": []}
     # Set `labels` for subsequent steps so gradient updates improve future predictions.
@@ -1253,6 +1191,7 @@ def collate_motion_batch(batch):
         joint_mask = item["joint_mask"]  # [S,W,J]
         # Set `ts` for subsequent steps so gradient updates improve future predictions.
         ts = item["window_timestamps"]  # [S,W]
+        rgb = item.get("rgb_windows", None)  # [S,W,3,224,224]
         # Set `w` for subsequent steps so gradient updates improve future predictions.
         w = int(motion.shape[1])
         # Branch on `w < max_w` to choose the correct output computation path.
@@ -1274,6 +1213,14 @@ def collate_motion_batch(batch):
                 [ts, torch.zeros((s, pad_w), dtype=ts.dtype)],
                 dim=1,
             )
+            if has_rgb and rgb is not None:
+                rgb = torch.cat(
+                    [
+                        rgb,
+                        torch.zeros((s, pad_w, 3, 224, 224), dtype=rgb.dtype),
+                    ],
+                    dim=1,
+                )
 
         # Call `motion_list.append` and use its result in later steps so gradient updates improve future predictions.
         motion_list.append(motion)
@@ -1281,6 +1228,8 @@ def collate_motion_batch(batch):
         mask_list.append(joint_mask)
         # Call `ts_list.append` and use its result in later steps so gradient updates improve future predictions.
         ts_list.append(ts)
+        if has_rgb and rgb is not None:
+            rgb_list.append(rgb)
         # Call `labels.append` and use its result in later steps so gradient updates improve future predictions.
         labels.append(item["label"])
         # Call `action_types.append` and use its result in later steps so gradient updates improve future predictions.
@@ -1298,8 +1247,7 @@ def collate_motion_batch(batch):
             # Call `append` and use its result in later steps so gradient updates improve future predictions.
             quality[k].append(item["qualities"][k])
 
-    # Return `{` as this function's contribution to downstream output flow.
-    return {
+    out = {
         "motion_windows": torch.stack(motion_list, dim=0),  # [B,S,W,J,F]
         "joint_mask": torch.stack(mask_list, dim=0),  # [B,S,W,J]
         "window_timestamps": torch.stack(ts_list, dim=0),  # [B,S,W]
@@ -1311,3 +1259,6 @@ def collate_motion_batch(batch):
         "subject_id": subject_ids,
         "window_size": torch.tensor(window_sizes, dtype=torch.int64),
     }
+    if has_rgb and rgb_list:
+        out["rgb_windows"] = torch.stack(rgb_list, dim=0)  # [B,S,W,3,224,224]
+    return out

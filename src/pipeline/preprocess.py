@@ -155,7 +155,7 @@ class VideoProcessor:
         self.max_frames = int(max_frames)
         self.schema = schema
 
-    def process_video_file(self, video_path, target_center=None, is_landmark_video=False):
+    def process_video_file(self, video_path, target_center=None, is_landmark_video=False, save_rgb=False):
         # target_center/is_landmark_video are kept for backward-compatible API.
         del target_center, is_landmark_video
         extract_holistic_landmarks = _load_landmark_extractor()
@@ -178,15 +178,17 @@ class VideoProcessor:
                 "face_score": float(q.get("face", 0.0)),
                 "overall_score": float(meta.get("overall_quality", 0.0)),
             }
-            processed.append(
-                {
-                    "frame_id": int(fd["frame_id"]),
-                    "timestamp": float(fd["timestamp"]),
-                    "landmarks": xyz,
-                    "mask": mask,
-                    "quality": quality,
-                }
-            )
+            row = {
+                "frame_id": int(fd["frame_id"]),
+                "timestamp": float(fd["timestamp"]),
+                "landmarks": xyz,
+                "mask": mask,
+                "quality": quality,
+            }
+            if bool(save_rgb):
+                rgb = cv2.cvtColor(fd["image"], cv2.COLOR_BGR2RGB)
+                row["rgb_224"] = cv2.resize(rgb, (224, 224), interpolation=cv2.INTER_AREA)
+            processed.append(row)
 
         return {
             "fps": float(fps),
@@ -234,6 +236,7 @@ def process_video_to_disk(
     target_center=None,
     is_landmark_video=False,
     overwrite=False,
+    save_rgb=False,
 ):
     del target_center, is_landmark_video
 
@@ -250,7 +253,7 @@ def process_video_to_disk(
 
     os.makedirs(out_dir, exist_ok=True)
     proc = processor or VideoProcessor(t_min=TMIN)
-    result = proc.process_video_file(video_path)
+    result = proc.process_video_file(video_path, save_rgb=bool(save_rgb))
     frames = result["frames"]
 
     if not frames:
@@ -266,6 +269,9 @@ def process_video_to_disk(
     np.save(os.path.join(out_dir, "landmark_mask.npy"), masks)
     np.save(os.path.join(out_dir, "frame_ids.npy"), frame_ids)
     np.save(os.path.join(out_dir, "timestamps.npy"), timestamps)
+    if bool(save_rgb):
+        rgb = np.stack([f["rgb_224"] for f in frames]).astype(np.uint8)
+        np.save(os.path.join(out_dir, "rgb_224.npy"), rgb)
 
     with open(os.path.join(out_dir, "quality.json"), "w", encoding="utf-8") as f:
         json.dump(quality, f, indent=2)
@@ -282,6 +288,7 @@ def process_video_to_disk(
         "max_frames": int(proc.max_frames),
         "schema": result["schema"],
         "num_frames": int(landmarks.shape[0]),
+        "saved_rgb_224": bool(save_rgb),
     }
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
@@ -299,6 +306,7 @@ def precompute_videos(
     progress_every=10,
     status_callback=None,
     skip_duplicates=True,
+    save_rgb=False,
 ):
     os.makedirs(processed_root, exist_ok=True)
     processor = VideoProcessor(t_min=t_min, frame_stride=frame_stride, max_frames=max_frames)
@@ -360,6 +368,7 @@ def precompute_videos(
             target_center=row["target_center"],
             is_landmark_video=row["is_landmark_video"],
             overwrite=overwrite,
+            save_rgb=bool(save_rgb),
         )
         if res.get("ok") and res.get("skipped"):
             skipped += 1
@@ -426,6 +435,7 @@ def main():
     parser.add_argument("--t-min", type=float, default=float(TMIN))
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--progress-every", type=int, default=10)
+    parser.add_argument("--save-rgb", action="store_true", help="Store resized RGB frames as rgb_224.npy")
     args = parser.parse_args()
 
     precompute_videos(
@@ -436,6 +446,7 @@ def main():
         t_min=float(args.t_min),
         overwrite=bool(args.overwrite),
         progress_every=int(args.progress_every),
+        save_rgb=bool(args.save_rgb),
     )
 
 

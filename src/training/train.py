@@ -132,6 +132,8 @@ def _build_dataset(cfg, is_training):
         max_frames=int(data_cfg.get("max_frames", 0)),
         cache_enabled=bool(data_cfg.get("cache_enabled", True)),
         smooth_kernel=int(data_cfg.get("smooth_kernel", 5)),
+        use_rgb=bool(data_cfg.get("use_rgb", False)),
+        pose_only=bool(data_cfg.get("pose_only", False)),
     )
 
 
@@ -168,11 +170,14 @@ def _build_loader(dataset, cfg, shuffle, generator=None):
 def _to_inputs(batch, device):
     """Executes this routine and returns values used by later pipeline output steps."""
     # Return `{` as this function's contribution to downstream output flow.
-    return {
+    out = {
         "motion_windows": batch["motion_windows"].to(device, non_blocking=True),
         "joint_mask": batch["joint_mask"].to(device, non_blocking=True),
         "window_timestamps": batch["window_timestamps"].to(device, non_blocking=True),
     }
+    if "rgb_windows" in batch:
+        out["rgb_windows"] = batch["rgb_windows"].to(device, non_blocking=True)
+    return out
 
 
 # Define a reusable pipeline function whose outputs feed later steps.
@@ -393,6 +398,7 @@ def _build_model_from_cfg(cfg):
     model_cfg = cfg.get("model", {})
     # Compute `thresholds` as an intermediate representation used by later output layers.
     thresholds = cfg.get("thresholds", {})
+    data_cfg = cfg.get("data", {})
     # Return `ASDPipeline(` as this function's contribution to downstream output flow.
     return ASDPipeline(
         K_max=int(model_cfg.get("K_max", 16)),
@@ -400,6 +406,8 @@ def _build_model_from_cfg(cfg):
         dropout=float(model_cfg.get("dropout", 0.2)),
         theta_high=float(thresholds.get("decision_high", 0.7)),
         theta_low=float(thresholds.get("decision_low", 0.3)),
+        use_rgb=bool(data_cfg.get("use_rgb", False)),
+        rgb_pretrained=bool(model_cfg.get("rgb_pretrained", True)),
     )
 
 
@@ -530,6 +538,7 @@ def train(cfg, status_file=None):
             overwrite=bool(data_cfg.get("preprocess_overwrite", False)),
             progress_every=int(data_cfg.get("precompute_progress_every", 10)),
             status_callback=lambda s: emit_status("preprocess", state="running", **s),
+            save_rgb=bool(data_cfg.get("save_rgb_preprocessed", data_cfg.get("use_rgb", False))),
         )
         # Call `emit_status` and use its result in later steps so gradient updates improve future predictions.
         emit_status("preprocess", state="done")
@@ -662,23 +671,28 @@ def train(cfg, status_file=None):
         # Stage 7: freeze backbone for stable NAS-supervised training.
         # Call `model.freeze_motion_encoder` and use its result in later steps so gradient updates improve future predictions.
         model.freeze_motion_encoder()
+        # Phase 2 starts pose-only; Phase 3 can enable RGB fusion later.
+        use_rgb = bool(cfg.get("data", {}).get("use_rgb", False))
+        model.set_use_rgb(False)
+        if hasattr(model, "freeze_rgb_backbone"):
+            model.freeze_rgb_backbone()
         # Update `criterion` with a loss term that drives backpropagation and output improvement.
         criterion = WeightedBCELoss(
             pos_weight=WeightedBCELoss.compute_from_labels(labels[tr_idx]),
             label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
             brier_weight=float(train_cfg.get("brier_weight", 0.0)),
         )
+        base_lr = float(train_cfg.get("lr", 1e-4))
+        rgb_lr = float(train_cfg.get("rgb_lr", max(base_lr * 0.1, 1e-5)))
         # Initialize `optimizer` to control parameter updates during training.
-        optimizer = torch.optim.AdamW(
-            model.model_parameters(),
-            lr=float(train_cfg.get("lr", 1e-4)),
-            weight_decay=float(train_cfg.get("weight_decay", 1e-4)),
-        )
+        optimizer = torch.optim.AdamW(model.model_parameters(), lr=base_lr, weight_decay=float(train_cfg.get("weight_decay", 1e-4)))
         # Set `scaler` for subsequent steps so gradient updates improve future predictions.
         scaler = torch.amp.GradScaler(device=str(device), enabled=str(device).startswith("cuda"))
 
         # Compute `epochs` as an intermediate representation used by later output layers.
         epochs = int(train_cfg.get("epochs", 20))
+        pose_only_epochs = int(train_cfg.get("pose_only_epochs", max(1, epochs // 2 if use_rgb else epochs)))
+        pose_only_epochs = max(1, min(epochs, pose_only_epochs))
         # Set `patience` for subsequent steps so gradient updates improve future predictions.
         patience = int(train_cfg.get("patience", 8))
         # Set `best_score` for subsequent steps so gradient updates improve future predictions.
@@ -690,6 +704,29 @@ def train(cfg, status_file=None):
 
         # Iterate over `range(1, epochs + 1)` so each item contributes to final outputs/metrics.
         for epoch in range(1, epochs + 1):
+            if use_rgb and epoch == (pose_only_epochs + 1):
+                model.set_use_rgb(True)
+                if hasattr(model, "freeze_rgb_backbone"):
+                    model.freeze_rgb_backbone()
+                base_params = []
+                rgb_params = []
+                for n, p in model.named_parameters():
+                    if not p.requires_grad:
+                        continue
+                    if n.startswith("rgb_branch.backbone"):
+                        continue
+                    if n.startswith("rgb_branch."):
+                        rgb_params.append(p)
+                    else:
+                        base_params.append(p)
+                param_groups = [{"params": base_params, "lr": base_lr}]
+                if rgb_params:
+                    param_groups.append({"params": rgb_params, "lr": rgb_lr})
+                optimizer = torch.optim.AdamW(
+                    param_groups,
+                    lr=base_lr,
+                    weight_decay=float(train_cfg.get("weight_decay", 1e-4)),
+                )
             # Update `tr_loss` with a loss term that drives backpropagation and output improvement.
             tr_loss = train_one_epoch(
                 model,
@@ -869,6 +906,10 @@ def train(cfg, status_file=None):
         pass
     # Call `model.freeze_motion_encoder` and use its result in later steps so gradient updates improve future predictions.
     model.freeze_motion_encoder()
+    use_rgb = bool(cfg.get("data", {}).get("use_rgb", False))
+    model.set_use_rgb(False)
+    if hasattr(model, "freeze_rgb_backbone"):
+        model.freeze_rgb_backbone()
 
     # Update `criterion` with a loss term that drives backpropagation and output improvement.
     criterion = WeightedBCELoss(
@@ -876,19 +917,42 @@ def train(cfg, status_file=None):
         label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
         brier_weight=float(train_cfg.get("brier_weight", 0.0)),
     )
+    base_lr = float(train_cfg.get("lr", 1e-4))
+    rgb_lr = float(train_cfg.get("rgb_lr", max(base_lr * 0.1, 1e-5)))
     # Initialize `optimizer` to control parameter updates during training.
-    optimizer = torch.optim.AdamW(
-        model.model_parameters(),
-        lr=float(train_cfg.get("lr", 1e-4)),
-        weight_decay=float(train_cfg.get("weight_decay", 1e-4)),
-    )
+    optimizer = torch.optim.AdamW(model.model_parameters(), lr=base_lr, weight_decay=float(train_cfg.get("weight_decay", 1e-4)))
     # Set `scaler` for subsequent steps so gradient updates improve future predictions.
     scaler = torch.amp.GradScaler(device=str(device), enabled=str(device).startswith("cuda"))
 
     # Compute `final_epochs` as an intermediate representation used by later output layers.
     final_epochs = int(train_cfg.get("final_epochs", 24))
+    final_pose_epochs = int(train_cfg.get("final_pose_only_epochs", max(1, final_epochs // 2 if use_rgb else final_epochs)))
+    final_pose_epochs = max(1, min(final_epochs, final_pose_epochs))
     # Iterate over `range(1, final_epochs + 1)` so each item contributes to final outputs/metrics.
     for epoch in range(1, final_epochs + 1):
+        if use_rgb and epoch == (final_pose_epochs + 1):
+            model.set_use_rgb(True)
+            if hasattr(model, "freeze_rgb_backbone"):
+                model.freeze_rgb_backbone()
+            base_params = []
+            rgb_params = []
+            for n, p in model.named_parameters():
+                if not p.requires_grad:
+                    continue
+                if n.startswith("rgb_branch.backbone"):
+                    continue
+                if n.startswith("rgb_branch."):
+                    rgb_params.append(p)
+                else:
+                    base_params.append(p)
+            groups_ = [{"params": base_params, "lr": base_lr}]
+            if rgb_params:
+                groups_.append({"params": rgb_params, "lr": rgb_lr})
+            optimizer = torch.optim.AdamW(
+                groups_,
+                lr=base_lr,
+                weight_decay=float(train_cfg.get("weight_decay", 1e-4)),
+            )
         # Update `loss` with a loss term that drives backpropagation and output improvement.
         loss = train_one_epoch(
             model,

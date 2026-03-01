@@ -16,6 +16,11 @@ import torch
 from src.models.pipeline_model import ASDPipeline
 # Import symbols from `src.models.video.mediapipe_layer.landmark_schema` used in this stage's output computation path.
 from src.models.video.mediapipe_layer.landmark_schema import DEFAULT_SCHEMA
+# Import symbols from `src.models.video.motion.features` used in this stage's output computation path.
+from src.models.video.motion.features import (
+    build_motion_features as _build_motion_features_shared,
+    normalize_landmarks as _normalize_landmarks_shared,
+)
 # Import symbols from `src.pipeline.preprocess` used in this stage's output computation path.
 from src.pipeline.preprocess import VideoProcessor
 # Import symbols from `src.utils.calibration` used in this stage's output computation path.
@@ -105,104 +110,13 @@ def _fill_missing_1d(values, valid):
 
 # Define a reusable pipeline function whose outputs feed later steps.
 def normalize_landmarks(landmarks, mask, schema=DEFAULT_SCHEMA, smooth_kernel=5):
-    """Executes this routine and returns values used by later pipeline output steps."""
-    # Compute `xyz` as an intermediate representation used by later output layers.
-    xyz = landmarks.copy()
-    # Build `m` to gate invalid timesteps/joints from influencing outputs.
-    m = mask.copy()
-    # Set `t, j, _` for subsequent steps so the returned prediction payload is correct.
-    t, j, _ = xyz.shape
-
-    # Iterate over `range(j)` so each item contributes to final outputs/metrics.
-    for jj in range(j):
-        # Set `valid` for subsequent steps so the returned prediction payload is correct.
-        valid = m[:, jj] > 0.5
-        # Iterate over `range(3)` so each item contributes to final outputs/metrics.
-        for c in range(3):
-            # Call `_fill_missing_1d` and use its result in later steps so the returned prediction payload is correct.
-            xyz[:, jj, c] = _fill_missing_1d(xyz[:, jj, c], valid)
-
-    # Hip center
-    # Compute `l_hip, r_hip` as an intermediate representation used by later output layers.
-    l_hip, r_hip = 23, 24
-    # Compute `hips_valid` as an intermediate representation used by later output layers.
-    hips_valid = (m[:, l_hip] > 0.5) & (m[:, r_hip] > 0.5)
-    # Set `center` for subsequent steps so the returned prediction payload is correct.
-    center = np.zeros((t, 3), dtype=np.float32)
-    # Compute `center[hips_valid]` as an intermediate representation used by later output layers.
-    center[hips_valid] = 0.5 * (xyz[hips_valid, l_hip] + xyz[hips_valid, r_hip])
-    # Branch on `hips_valid.any()` to choose the correct output computation path.
-    if hips_valid.any():
-        # Set `last` for subsequent steps so the returned prediction payload is correct.
-        last = center[np.where(hips_valid)[0][0]].copy()
-    else:
-        # Set `last` for subsequent steps so the returned prediction payload is correct.
-        last = np.zeros((3,), dtype=np.float32)
-    # Iterate over `range(t)` so each item contributes to final outputs/metrics.
-    for i in range(t):
-        # Branch on `hips_valid[i]` to choose the correct output computation path.
-        if hips_valid[i]:
-            # Set `last` for subsequent steps so the returned prediction payload is correct.
-            last = center[i]
-        else:
-            # Set `center[i]` for subsequent steps so the returned prediction payload is correct.
-            center[i] = last
-    # Compute `xyz` as an intermediate representation used by later output layers.
-    xyz = xyz - center[:, None, :]
-
-    # Shoulder scale
-    # Compute `l_sh, r_sh` as an intermediate representation used by later output layers.
-    l_sh, r_sh = 11, 12
-    # Compute `sh_valid` as an intermediate representation used by later output layers.
-    sh_valid = (m[:, l_sh] > 0.5) & (m[:, r_sh] > 0.5)
-    # Set `scale` for subsequent steps so the returned prediction payload is correct.
-    scale = np.ones((t,), dtype=np.float32)
-    # Branch on `sh_valid.any()` to choose the correct output computation path.
-    if sh_valid.any():
-        # Set `d` for subsequent steps so the returned prediction payload is correct.
-        d = np.linalg.norm(xyz[:, l_sh] - xyz[:, r_sh], axis=-1)
-        # Set `d` for subsequent steps so the returned prediction payload is correct.
-        d = np.clip(d, 1e-4, None)
-        # Compute `scale[sh_valid]` as an intermediate representation used by later output layers.
-        scale[sh_valid] = d[sh_valid]
-        # Call `float` and use its result in later steps so the returned prediction payload is correct.
-        scale[~sh_valid] = float(np.median(scale[sh_valid]))
-    # Compute `xyz` as an intermediate representation used by later output layers.
-    xyz = xyz / scale[:, None, None]
-
-    # Iterate over `range(j)` so each item contributes to final outputs/metrics.
-    for jj in range(j):
-        # Set `valid` for subsequent steps so the returned prediction payload is correct.
-        valid = m[:, jj]
-        # Iterate over `range(3)` so each item contributes to final outputs/metrics.
-        for c in range(3):
-            # Set `sm` for subsequent steps so the returned prediction payload is correct.
-            sm = _moving_average_1d(xyz[:, jj, c], k=smooth_kernel)
-            # Call `this call` and use its result in later steps so the returned prediction payload is correct.
-            xyz[:, jj, c] = (valid * sm) + ((1.0 - valid) * xyz[:, jj, c])
-    # Return `xyz, m` as this function's contribution to downstream output flow.
-    return xyz, m
+    del schema
+    return _normalize_landmarks_shared(landmarks, mask, smooth_kernel=int(smooth_kernel))
 
 
 # Define a reusable pipeline function whose outputs feed later steps.
 def build_motion_features(xyz, mask):
-    """Constructs components whose structure controls later training or inference outputs."""
-    # Set `vel` for subsequent steps so the returned prediction payload is correct.
-    vel = np.zeros_like(xyz, dtype=np.float32)
-    # Set `acc` for subsequent steps so the returned prediction payload is correct.
-    acc = np.zeros_like(xyz, dtype=np.float32)
-    # Branch on `xyz.shape[0] > 1` to choose the correct output computation path.
-    if xyz.shape[0] > 1:
-        # Execute this statement so the returned prediction payload is correct.
-        vel[1:] = xyz[1:] - xyz[:-1]
-        # Execute this statement so the returned prediction payload is correct.
-        acc[1:] = vel[1:] - vel[:-1]
-    # Compute `feat` as an intermediate representation used by later output layers.
-    feat = np.concatenate([xyz, vel, acc], axis=-1).astype(np.float32)
-    # Build `feat *` to gate invalid timesteps/joints from influencing outputs.
-    feat *= mask[..., None]
-    # Return `feat` as this function's contribution to downstream output flow.
-    return feat
+    return _build_motion_features_shared(xyz, mask)
 
 
 # Define a reusable pipeline function whose outputs feed later steps.
@@ -296,6 +210,8 @@ class ASDPredictor:
             dropout=float(model_cfg.get("dropout", 0.2)),
             theta_high=float(th.get("decision_high", 0.7)),
             theta_low=float(th.get("decision_low", 0.3)),
+            use_rgb=bool(cfg.get("data", {}).get("use_rgb", False)),
+            rgb_pretrained=bool(model_cfg.get("rgb_pretrained", True)),
         ).to(self.device)
         # Compute `nas_arch` as an intermediate representation used by later output layers.
         nas_arch = ckpt.get("nas_architecture", None)
@@ -333,11 +249,12 @@ class ASDPredictor:
         # Compute `self.high_thr` as an intermediate representation used by later output layers.
         self.high_thr = float(th.get("decision_high", 0.7))
         # Compute `self.window_size` as an intermediate representation used by later output layers.
-        self.window_size = int(cfg.get("inference", {}).get("window_size", 64))
+        self.window_size = int(cfg.get("inference", {}).get("window_size", 48))
         # Compute `self.window_stride` as an intermediate representation used by later output layers.
         self.window_stride = int(cfg.get("inference", {}).get("window_stride", 16))
         # Set `self.model_version` for subsequent steps so the returned prediction payload is correct.
         self.model_version = str(cfg.get("inference", {}).get("model_version", "asd_motion_landmark_v2"))
+        self.use_rgb = bool(cfg.get("data", {}).get("use_rgb", False))
 
     # Define a reusable pipeline function whose outputs feed later steps.
     def _frames_to_arrays(self, frames):
@@ -352,6 +269,7 @@ class ASDPredictor:
                 np.zeros((1, j), dtype=np.float32),
                 np.zeros((1,), dtype=np.float32),
                 {"face": 0.0, "pose": 0.0, "hand": 0.0},
+                None,
             )
         # Set `landmarks` for subsequent steps so the returned prediction payload is correct.
         landmarks = np.stack([f["landmarks"] for f in frames]).astype(np.float32)
@@ -365,11 +283,14 @@ class ASDPredictor:
         pose_q = float(np.mean([f["quality"].get("pose_score", 0.0) for f in frames]))
         # Compute `hand_q` as an intermediate representation used by later output layers.
         hand_q = float(np.mean([f["quality"].get("hand_score", 0.0) for f in frames]))
+        rgb = None
+        if self.use_rgb and "rgb_224" in frames[0]:
+            rgb = np.stack([f["rgb_224"] for f in frames]).astype(np.uint8)
         # Return `landmarks, mask, timestamps, {"face": face_q, "pose...` as this function's contribution to downstream output flow.
-        return landmarks, mask, timestamps, {"face": face_q, "pose": pose_q, "hand": hand_q}
+        return landmarks, mask, timestamps, {"face": face_q, "pose": pose_q, "hand": hand_q}, rgb
 
     # Define inference logic that produces the prediction returned to callers.
-    def _predict_arrays(self, landmarks, mask, timestamps, modality_quality):
+    def _predict_arrays(self, landmarks, mask, timestamps, modality_quality, rgb_frames=None):
         """Builds inference outputs from inputs and returns values consumed by users or services."""
         # Set `start` for subsequent steps so the returned prediction payload is correct.
         start = time.time()
@@ -382,6 +303,9 @@ class ASDPredictor:
         )
         # Set `motion` for subsequent steps so the returned prediction payload is correct.
         motion = build_motion_features(xyz, m)
+        if bool(self.cfg.get("data", {}).get("pose_only", False)):
+            motion = motion[:, DEFAULT_SCHEMA.pose_slice, :]
+            m = m[:, DEFAULT_SCHEMA.pose_slice]
         # Build `windows, wmasks, wts, starts` to gate invalid timesteps/joints from influencing outputs.
         windows, wmasks, wts, starts = sliding_windows(
             motion,
@@ -396,6 +320,22 @@ class ASDPredictor:
             "joint_mask": torch.from_numpy(wmasks).unsqueeze(0).to(self.device),
             "window_timestamps": torch.from_numpy(wts).unsqueeze(0).to(self.device),
         }
+        if self.use_rgb:
+            if rgb_frames is None:
+                rgb_windows = np.zeros((windows.shape[0], windows.shape[1], 3, 224, 224), dtype=np.float32)
+            else:
+                rgb_windows = []
+                for s0 in starts:
+                    e0 = s0 + self.window_size
+                    rw = rgb_frames[s0:e0]
+                    if rw.shape[0] < self.window_size:
+                        pad = self.window_size - rw.shape[0]
+                        rw = np.pad(rw, ((0, pad), (0, 0), (0, 0), (0, 0)), mode="constant")
+                    rw = rw.astype(np.float32) / 255.0
+                    rw = np.transpose(rw, (0, 3, 1, 2))
+                    rgb_windows.append(rw)
+                rgb_windows = np.stack(rgb_windows, axis=0).astype(np.float32)
+            inputs["rgb_windows"] = torch.from_numpy(rgb_windows).unsqueeze(0).to(self.device)
         # Use a managed context to safely handle resources used during output computation.
         with torch.no_grad():
             # Set `out` for subsequent steps so the returned prediction payload is correct.
@@ -562,6 +502,7 @@ class ASDPredictor:
         mask_path = os.path.join(base_dir, "landmark_mask.npy")
         # Compute `timestamps_path` as an intermediate representation used by later output layers.
         timestamps_path = os.path.join(base_dir, "timestamps.npy")
+        rgb_path = os.path.join(base_dir, "rgb_224.npy")
         # Compute `quality_path` as an intermediate representation used by later output layers.
         quality_path = os.path.join(base_dir, "quality.json")
         # Branch on `not (os.path.exists(landmarks_path) and os.path.e...` to choose the correct output computation path.
@@ -575,6 +516,11 @@ class ASDPredictor:
         mask = np.load(mask_path).astype(np.float32)
         # Set `timestamps` for subsequent steps so the returned prediction payload is correct.
         timestamps = np.load(timestamps_path).astype(np.float32)
+        rgb = None
+        if self.use_rgb and os.path.exists(rgb_path):
+            rgb = np.load(rgb_path)
+            if rgb.dtype != np.uint8:
+                rgb = np.clip(rgb, 0, 255).astype(np.uint8)
         # Set `modality_quality` for subsequent steps so the returned prediction payload is correct.
         modality_quality = {"face": 0.0, "pose": 0.0, "hand": 0.0}
         # Branch on `os.path.exists(quality_path)` to choose the correct output computation path.
@@ -595,26 +541,25 @@ class ASDPredictor:
             except Exception:
                 # No-op placeholder that keeps control-flow structure intact.
                 pass
-        # Return `landmarks, mask, timestamps, modality_quality` as this function's contribution to downstream output flow.
-        return landmarks, mask, timestamps, modality_quality
+        return landmarks, mask, timestamps, modality_quality, rgb
 
     # Define inference logic that produces the prediction returned to callers.
     def predict_video(self, video_path: str) -> dict:
         """Builds inference outputs from inputs and returns values consumed by users or services."""
         # Set `processed` for subsequent steps so the returned prediction payload is correct.
-        processed = self.processor.process_video_file(video_path)
+        processed = self.processor.process_video_file(video_path, save_rgb=self.use_rgb)
         # Build `landmarks, mask, timestamps...` to gate invalid timesteps/joints from influencing outputs.
-        landmarks, mask, timestamps, quality = self._frames_to_arrays(processed["frames"])
+        landmarks, mask, timestamps, quality, rgb = self._frames_to_arrays(processed["frames"])
         # Return `self._predict_arrays(landmarks, mask, timestamps, q...` as this function's contribution to downstream output flow.
-        return self._predict_arrays(landmarks, mask, timestamps, quality)
+        return self._predict_arrays(landmarks, mask, timestamps, quality, rgb_frames=rgb)
 
     # Define inference logic that produces the prediction returned to callers.
     def predict_preprocessed(self, processed_ref: str, processed_root: str = None) -> dict:
         """Builds inference outputs from inputs and returns values consumed by users or services."""
         # Build `landmarks, mask, timestamps...` to gate invalid timesteps/joints from influencing outputs.
-        landmarks, mask, timestamps, quality = self._load_preprocessed_arrays(processed_ref, processed_root)
+        landmarks, mask, timestamps, quality, rgb = self._load_preprocessed_arrays(processed_ref, processed_root)
         # Return `self._predict_arrays(landmarks, mask, timestamps, q...` as this function's contribution to downstream output flow.
-        return self._predict_arrays(landmarks, mask, timestamps, quality)
+        return self._predict_arrays(landmarks, mask, timestamps, quality, rgb_frames=rgb)
 
     # Define inference logic that produces the prediction returned to callers.
     def predict_landmark_video(self, video_path: str) -> dict:
