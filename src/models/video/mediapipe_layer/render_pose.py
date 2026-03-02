@@ -33,26 +33,37 @@ def render_pose(pose_landmarks, image_size=(256, 256)):
         skeleton image (H, W, 3) or None
     """
 
+    # Branch behavior based on the current runtime condition.
     if pose_landmarks is None:
+        # Return the result expected by the caller.
         return None
 
+    # Compute `(h, w)` for the next processing step.
     h, w = image_size
+    # Compute `img` for the next processing step.
     img = np.zeros((h, w, 3), dtype=np.uint8)
 
     # Convert normalized coords → pixels
     points = []
+    # Iterate `lm` across `pose_landmarks` to process each element.
     for lm in pose_landmarks:
+        # Compute `x` for the next processing step.
         x = int(lm.x * w)
+        # Compute `y` for the next processing step.
         y = int(lm.y * h)
+        # Invoke `points.append` to advance this processing stage.
         points.append((x, y))
 
     # Draw bones
     for a, b in POSE_CONNECTIONS:
+        # Invoke `cv2.line` to advance this processing stage.
         cv2.line(img, points[a], points[b], (255, 255, 255), 2)
 
     # Draw joints
     for x, y in points:
+        # Invoke `cv2.circle` to advance this processing stage.
         cv2.circle(img, (x, y), 3, (255, 255, 255), -1)
 
+    # Return the result expected by the caller.
     return img
 

@@ -33,6 +33,25 @@ def _as_int_list(values):
     return out if out else None
 
 
+def _adapt_state_dict_for_video_only(model_state: dict) -> dict:
+    # Keep video/NAS weights, remap legacy motion encoder keys to hand encoder keys,
+    # and drop removed image/fusion branches.
+    out = {}
+    for k, v in model_state.items():
+        if (
+            k.startswith("fusion.") or
+            k.startswith("perception_cnn.") or
+            k.startswith("static_encoder.") or
+            k.startswith("image_head.")
+        ):
+            continue
+        if k.startswith("motion_cnn."):
+            out["hand_cnn." + k[len("motion_cnn."):]] = v
+            continue
+        out[k] = v
+    return out
+
+
 class ASDPredictor:
     def __init__(self, checkpoint_path: str, config_path: str = None, device: str = None):
         if not os.path.exists(checkpoint_path):
@@ -135,7 +154,8 @@ class ASDPredictor:
         if nas_arch is not None:
             self.model.apply_nas_architecture(nas_arch)
 
-        self.model.load_state_dict(model_state)
+        model_state = _adapt_state_dict_for_video_only(model_state)
+        self.model.load_state_dict(model_state, strict=False)
         self.model.eval()
         self.model.freeze_cnns()
 
@@ -158,6 +178,7 @@ class ASDPredictor:
             "face_crops": sample["face_crops"].unsqueeze(0).to(self.device),
             "pose_maps": sample["pose_maps"].unsqueeze(0).to(self.device),
             "motion_maps": sample["motion_maps"].unsqueeze(0).to(self.device),
+            "hand_maps": sample["motion_maps"].unsqueeze(0).to(self.device),
             "mask": sample["mask"].unsqueeze(0).to(self.device),
             "timestamps": sample["timestamps"].unsqueeze(0).to(self.device),
             "delta_t": sample["delta_t"].unsqueeze(0).to(self.device),

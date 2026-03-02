@@ -17,12 +17,7 @@ def _build_backbone(backbone_name: str, pretrained: bool):
     raise ValueError(f"Unsupported backbone: {backbone_name}")
 
 
-class PerceptionCNN(nn.Module):
-    """
-    Perception CNN for the image path.
-    Processes single images (frames) for static evidence.
-    """
-
+class HandN(nn.Module):
     def __init__(self, pretrained: bool = True, backbone_name: str = "resnet18"):
         super().__init__()
 
@@ -37,7 +32,6 @@ class PerceptionCNN(nn.Module):
         )
 
     def forward(self, x):
-        features = self.backbone(x)
-        features = self.proj(features)
-        return features
-
+        x = self.backbone(x)
+        x = self.proj(x)
+        return x

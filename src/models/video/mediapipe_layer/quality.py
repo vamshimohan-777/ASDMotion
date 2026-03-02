@@ -13,16 +13,20 @@ def compute_quality_mask(
     Scores should be normalized [0, 1].
     """
 
+    # Compute `pose_valid` for the next processing step.
     pose_valid = 1 if pose_landmarks is not None else 0
+    # Compute `face_valid` for the next processing step.
     face_valid = 1 if face_landmarks is not None else 0
 
     # Ensure scores are present if valid
     if face_valid and face_score == 0.0: face_score = 0.5 # Default if not provided
+    # Branch behavior based on the current runtime condition.
     if pose_valid and pose_score == 0.0: pose_score = 0.5
 
     # Pose is mandatory for skeleton rendering usually, but here we track quality.
     frame_valid = 1 if (pose_valid == 1 or face_valid == 1) else 0
 
+    # Return the result expected by the caller.
     return {
         "frame_id": frame_id,
         "pose_valid": pose_valid,
